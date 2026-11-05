@@ -1672,6 +1672,50 @@ class LCMEngine(CompactionMixin, ResetStateMixin, ReconcileMixin, AuxiliarySessi
 
         return current_chunk[:-1]
 
+    # Keys the server-side chat template consumes; extra local keys must not
+    # reach the wire and token identity only depends on these.
+    _CHAIN_SAFE_MESSAGE_KEYS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+    def _summary_chain_prefix(self, attempt_chunk: List[Dict[str, Any]]) -> List[Dict[str, Any]] | None:
+        """Exact live-prefix messages for a chain-shaped summary (Strata).
+
+        Returns system + oldest..chunk-end when the chunk is a gapless
+        identity-contiguous prefix of the live list this compress() received;
+        None whenever token identity cannot be guaranteed (blob fallback).
+        Gaps are never bridged: an ignored/quarantined message inside the span
+        would leak into the persisted summary, and an already-compacted leaf
+        would change what is being summarized.
+        """
+        if not getattr(self._config, "summary_chain_enabled", False):
+            return None
+        if (self._config.summary_model or "").strip():
+            # Explicit non-main summariser routing breaks cache identity.
+            return None
+        live = getattr(self, "_current_compress_live_messages", None)
+        if not live or not attempt_chunk:
+            return None
+        pos_last = None
+        for idx in range(len(live) - 1, -1, -1):
+            if live[idx] is attempt_chunk[-1]:
+                pos_last = idx
+                break
+        if pos_last is None:
+            return None
+        anchor = self._leading_anchor_count(live)
+        span = live[anchor:pos_last + 1]
+        if len(span) != len(attempt_chunk) or any(
+            a is not b for a, b in zip(span, attempt_chunk)
+        ):
+            return None
+        return [
+            {
+                key: msg[key]
+                for key in self._CHAIN_SAFE_MESSAGE_KEYS
+                if key in msg and msg[key] is not None
+            }
+            for msg in live[:pos_last + 1]
+        ]
+
     def _summarize_leaf_chunk_with_rescue(
         self,
         initial_chunk: List[Dict[str, Any]],
@@ -1693,6 +1737,12 @@ class LCMEngine(CompactionMixin, ResetStateMixin, ReconcileMixin, AuxiliarySessi
             ))
             token_budget = max(2000, int(source_tokens * 0.20))
             token_budget = min(token_budget, 12000)
+            chain_prefix: List[Dict[str, Any]] | None = None
+            if source_tokens >= 1024:
+                try:
+                    chain_prefix = self._summary_chain_prefix(attempt_chunk)
+                except Exception:
+                    logger.debug("LCM chain prefix build failed; using blob path", exc_info=True)
 
             try:
                 timeout_seconds = self._config.summary_timeout_ms / 1000
@@ -1720,6 +1770,7 @@ class LCMEngine(CompactionMixin, ResetStateMixin, ReconcileMixin, AuxiliarySessi
                         "store_ids": source_store_ids,
                         "message_count": len(attempt_chunk),
                     },
+                    chain_messages=chain_prefix,
                 )
                 return attempt_chunk, source_tokens, summary_text, level, attempt_number
             except Exception as exc:

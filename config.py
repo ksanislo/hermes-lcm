@@ -367,6 +367,7 @@ ENV_FIELD_SPECS: tuple[_EnvFieldSpec, ...] = (
     _EnvFieldSpec("expansion_model", "LCM_EXPANSION_MODEL", str),
     _EnvFieldSpec("expansion_context_tokens", "LCM_EXPANSION_CONTEXT_TOKENS", int),
     _EnvFieldSpec("summary_timeout_ms", "LCM_SUMMARY_TIMEOUT_MS", int),
+    _EnvFieldSpec("summary_chain_enabled", "LCM_SUMMARY_CHAIN_ENABLED", bool),
     _EnvFieldSpec("expansion_timeout_ms", "LCM_EXPANSION_TIMEOUT_MS", int),
     _EnvFieldSpec("database_path", "LCM_DATABASE_PATH", str),
     _EnvFieldSpec("embeddings_enabled", "LCM_EMBEDDINGS_ENABLED", bool),
@@ -392,6 +393,8 @@ ENV_FIELD_SPECS: tuple[_EnvFieldSpec, ...] = (
     _EnvFieldSpec("embedding_model", "LCM_EMBEDDING_MODEL", str),
     _EnvFieldSpec("embedding_content_policy", "LCM_EMBED_CONTENT_POLICY", str),
     _EnvFieldSpec("ollama_base_url", "LCM_OLLAMA_BASE_URL", str),
+    _EnvFieldSpec("embedding_base_url", "LCM_EMBEDDING_BASE_URL", str),
+    _EnvFieldSpec("embedding_api_key_env", "LCM_EMBEDDING_API_KEY_ENV", str),
     _EnvFieldSpec("embedding_query_timeout_s", "LCM_EMBEDDING_QUERY_TIMEOUT_S", float),
     _EnvFieldSpec("recall_query_timeout_s", "LCM_RECALL_QUERY_TIMEOUT_S", float),
     _EnvFieldSpec("embedding_backfill_timeout_s", "LCM_EMBEDDING_BACKFILL_TIMEOUT_S", float),
@@ -598,6 +601,10 @@ class LCMConfig:
 
     # -- Timeouts ---
     summary_timeout_ms: int = 60_000
+    # Strata prompt-cache chain summaries: send the leaf as the exact live
+    # conversation prefix + trailing instruction message so the engine resumes
+    # from its checkpoint chain instead of re-reading a re-rendered blob.
+    summary_chain_enabled: bool = False
     expansion_timeout_ms: int = 120_000
 
     # -- Storage ---
@@ -710,6 +717,8 @@ class LCMConfig:
     # default in the chunker's normalize_content_policy.
     embedding_content_policy: str = "conversational"
     ollama_base_url: str = "http://localhost:11434"
+    embedding_base_url: str = ""
+    embedding_api_key_env: str = "OPENAI_API_KEY"
     embedding_query_timeout_s: float = 3.0
     # Dedicated deadline for lcm_recall. It fans out three sequential arms (FTS +
     # summary KNN + chunk KNN) plus fusion, hydration, and an optional rerank, so

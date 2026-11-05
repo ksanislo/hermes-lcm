@@ -1514,6 +1514,103 @@ class OllamaProvider(_ResilientProvider):
         )[0]
 
 
+class OpenAICompatProvider(OllamaProvider):
+    """OpenAI-compatible ``{base_url}/embeddings`` providers (llama-swap,
+    llama-server --embedding, vLLM, ...).
+
+    Reuses the full OllamaProvider request orchestration — absolute deadlines,
+    retry policy, circuit breaker, spend guard, and dimension locking — behind a
+    transport adapter that translates between the two dialects: the base class
+    composes an Ollama ``/api/embed`` request, while this provider posts
+    ``{"model", "input"}`` to the OpenAI embeddings route and converts the
+    ``{"data": [{"index", "embedding"}]}`` reply back into the Ollama
+    ``{"embeddings": [...]}`` shape before parse validation. Non-2xx replies
+    pass through unchanged so the base class fails them loudly (oversized
+    input must never be silently truncated).
+
+    The API key is never stored in plugin config: ``api_key_env`` names an
+    environment variable resolved at provider construction.
+    """
+
+    provider_id = "openai"
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str,
+        api_key_env: str = "OPENAI_API_KEY",
+        transport: HttpTransport | None = None,
+        timeout: float = 3.0,
+        sleeper: Callable[[float], None] = time.sleep,
+        breaker: EmbeddingCircuitBreaker | None = None,
+        spend_guard: EmbeddingSpendGuard | None = None,
+    ) -> None:
+        clean_base = str(base_url).strip().rstrip("/")
+        if not clean_base:
+            raise ProviderUnavailable(
+                "LCM_EMBEDDING_BASE_URL must be set for the openai embedding provider"
+            )
+        key_name = str(api_key_env).strip() or "OPENAI_API_KEY"
+        api_key = os.environ.get(key_name, "")
+        if not api_key:
+            raise ProviderUnavailable(
+                f"OpenAI embedding API key env var '{key_name}' is not set"
+            )
+        self._embeddings_url = f"{clean_base}/embeddings"
+        self._auth_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        super().__init__(
+            model,
+            base_url=clean_base,
+            transport=transport or self._make_translator(),
+            timeout=timeout,
+            sleeper=sleeper,
+            breaker=breaker,
+            spend_guard=spend_guard,
+        )
+
+    def _make_translator(self) -> HttpTransport:
+        def _transport(
+            *,
+            url: str,
+            payload: Mapping[str, Any],
+            headers: Mapping[str, str],
+            timeout: float,
+        ) -> HttpResponse:
+            # The base class builds an Ollama-shaped request; re-post it as
+            # OpenAI embeddings against our own URL ("url" is intentionally
+            # ignored). "truncate" has no OpenAI equivalent — the upstream
+            # llama.cpp server rejects oversized input, which is the desired
+            # fail-loud behavior.
+            response = _default_http_transport(
+                url=self._embeddings_url,
+                payload={
+                    "model": payload.get("model"),
+                    "input": payload.get("input"),
+                },
+                headers=self._auth_headers,
+                timeout=timeout,
+            )
+            if not 200 <= response.status < 300:
+                return response
+            body = json.loads(response.body)
+            items = sorted(
+                body.get("data", []), key=lambda item: item.get("index", 0)
+            )
+            converted = json.dumps(
+                {
+                    "model": payload.get("model"),
+                    "embeddings": [item["embedding"] for item in items],
+                }
+            ).encode("utf-8")
+            return HttpResponse(response.status, response.headers, converted)
+
+        return _transport
+
+
 def _load_fastembed():
     """Import the optional dependency in one patchable location."""
     from fastembed import TextEmbedding
@@ -1748,8 +1845,18 @@ def resolve_provider(
         return FastembedProvider(
             model, timeout=timeout, spend_guard=spend_guard
         )
+    if provider in {"openai", "openai-compat", "openai_compat", "openai-compatible"}:
+        return OpenAICompatProvider(
+            model,
+            base_url=getattr(config, "embedding_base_url", ""),
+            api_key_env=getattr(config, "embedding_api_key_env", "")
+            or "OPENAI_API_KEY",
+            timeout=timeout,
+            spend_guard=spend_guard,
+        )
     raise ProviderUnavailable(
-        f"Unsupported embedding provider {provider!r}; use voyage, ollama, or fastembed"
+        f"Unsupported embedding provider {provider!r}; "
+        "use voyage, ollama, fastembed, or openai"
     )
 
 
