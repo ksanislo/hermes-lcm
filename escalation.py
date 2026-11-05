@@ -720,8 +720,8 @@ def summarize_with_escalation(
             extra_body=chain_extra_body,
         )
         if chain_result:
-            logger.debug(
-                "LCM chain L1 summary succeeded (%d prefix messages)",
+            logger.info(
+                "LCM chain L1 summary accepted (%d prefix messages, Strata prompt-cache resume)",
                 len(chain_messages),
             )
             return chain_result, 1
