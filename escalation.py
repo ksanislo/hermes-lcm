@@ -716,7 +716,7 @@ def summarize_with_escalation(
             timeout=timeout,
             circuit_breaker=circuit_breaker,
             spend_guard=spend_guard,
-            accepts_result=lambda result: count_tokens(result) < source_tokens,
+            accepts_result=lambda result: count_tokens(result) <= token_budget,
             extra_body=chain_extra_body,
         )
         if chain_result:
