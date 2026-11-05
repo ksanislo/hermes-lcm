@@ -367,6 +367,7 @@ ENV_FIELD_SPECS: tuple[_EnvFieldSpec, ...] = (
     _EnvFieldSpec("expansion_model", "LCM_EXPANSION_MODEL", str),
     _EnvFieldSpec("expansion_context_tokens", "LCM_EXPANSION_CONTEXT_TOKENS", int),
     _EnvFieldSpec("summary_timeout_ms", "LCM_SUMMARY_TIMEOUT_MS", int),
+    _EnvFieldSpec("summary_chain_enabled", "LCM_SUMMARY_CHAIN_ENABLED", bool),
     _EnvFieldSpec("expansion_timeout_ms", "LCM_EXPANSION_TIMEOUT_MS", int),
     _EnvFieldSpec("database_path", "LCM_DATABASE_PATH", str),
     _EnvFieldSpec("embeddings_enabled", "LCM_EMBEDDINGS_ENABLED", bool),
@@ -598,6 +599,10 @@ class LCMConfig:
 
     # -- Timeouts ---
     summary_timeout_ms: int = 60_000
+    # Strata prompt-cache chain summaries: send the leaf as the exact live
+    # conversation prefix + trailing instruction message so the engine resumes
+    # from its checkpoint chain instead of re-reading a re-rendered blob.
+    summary_chain_enabled: bool = False
     expansion_timeout_ms: int = 120_000
 
     # -- Storage ---

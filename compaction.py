@@ -383,7 +383,12 @@ class CompactionMixin:
 
         self._last_compression_status = "running"
         self._last_compression_noop_reason = ""
+        # Chain-shaped summaries (Strata prompt cache): the summariser may need
+        # the exact live list this compress() call received — the working list
+        # can contain redacted replay copies that are not token-identical to
+        # what the engine already holds.
         _compress_started = time.perf_counter()
+        self._current_compress_live_messages = list(messages)
 
         self._maybe_reclassify_late_auxiliary_before_compaction_write()
         if self._bypasses_lcm_context_management():
